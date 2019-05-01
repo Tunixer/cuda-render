@@ -32,7 +32,7 @@ static inline int nextPow2(int n) {
 CUDA kernel
 A naive version of exlcusive scan
 */
-__global__ void work_inefficient_scan_kernel(int *X, int *Y, int InputSize){
+__global__ void work_inefficient_scan_kernel_1(int *X, int *Y, int InputSize){
     int idx = blockIdx.x*blockDim.x +threadIdx.x;
     int sum = 0;
     for(int i = 0; i < idx; i++ ){
@@ -40,6 +40,59 @@ __global__ void work_inefficient_scan_kernel(int *X, int *Y, int InputSize){
     }
     Y[idx] = sum;
 }
+
+/*
+CUDA Kernel
+An N*log(N) version of exclusive scan
+However this version cannot spanning to different blocks
+*/
+__global__ void work_inefficient_scan_kernel_2(int *X, int *Y, int InputSize) {
+    __shared__ int XY[THREADS_PER_BLOCK];
+    int i = blockIdx.x*blockDim.x + threadIdx.x;
+    if (i < InputSize) {XY[threadIdx.x] = X[i];}
+      // the code below performs iterative scan on XY
+    for (unsigned int stride = 1; stride <= threadIdx.x; stride *= 2) {
+        __syncthreads();
+        int in1 = XY[threadIdx.x-stride];
+        __syncthreads();
+        XY[threadIdx.x] += in1;
+    }
+    Y[i] = XY[threadIdx.x] - X[i];
+}
+    
+/*
+CUDA Kernel
+An O(N) version of exclusive scan
+
+*/
+
+__global__ void work_efficient_scan_kernel(int *X, int *Y, int InputSize) {
+    // XY[2*BLOCK_SIZE] is in shared memory
+    __shared__ int XY[THREADS_PER_BLOCK * 2];
+    int i = blockIdx.x*blockDim.x + threadIdx.x;
+    if (i < InputSize) {XY[threadIdx.x] = X[i];}
+    
+      // the code below performs iterative scan on XY
+    for (unsigned int stride = 1; stride <= THREADS_PER_BLOCK; stride *= 2) {
+        __syncthreads();
+        int index = (threadIdx.x+1)*stride*2 - 1; 
+        if(index < 2*THREADS_PER_BLOCK)
+            XY[index] += XY[index - stride];//index is alway bigger than stride
+        __syncthreads();
+    }
+      // threadIdx.x+1 = 1,2,3,4....
+      // stridek index = 1,3,5,7...
+
+    for (unsigned int stride = THREADS_PER_BLOCK/2; stride > 0 ; stride /= 2) {
+        __syncthreads();
+        int index = (threadIdx.x+1)*stride*2 - 1;
+        if(index < 2*THREADS_PER_BLOCK)
+            XY[index + stride] += XY[index];  
+    }
+    __syncthreads();
+    Y[i] = XY[threadIdx.x];
+}
+
 
 // exclusive_scan --
 //
@@ -68,9 +121,9 @@ void exclusive_scan(int* input, int N, int* result)
     // to CUDA kernel functions (that you must write) to implement the
     // scan.
     printf("Start ex_scan\n");
-    const int threadsPerBlock = 32;
+    const int threadsPerBlock = THREADS_PER_BLOCK;
     const int blocks = N / threadsPerBlock+1;
-    work_inefficient_scan_kernel<<<blocks, threadsPerBlock>>>(input,result,N);
+    work_efficient_scan_kernel<<<blocks, threadsPerBlock>>>(input,result,N);
 
 }
 

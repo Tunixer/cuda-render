@@ -141,6 +141,12 @@ int main(int argc, char** argv) {
             checkarray[i] = 1;
         }  
     }
+
+    std::cout<<"Array of size 10:";
+    for(int i = 0; i < 10; i++){
+        std::cout<<inarray[i]<<" ";
+    }
+    std::cout<<"\n";
     
     // I comment this statement because it cause stack smashing in my computer.
     //printCudaInfo();
