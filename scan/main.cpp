@@ -3,6 +3,7 @@
 #include <getopt.h>
 #include <string>
 #include <cstring>
+#include <iostream>
 
 #include "CycleTimer.h"
 
@@ -140,9 +141,9 @@ int main(int argc, char** argv) {
             checkarray[i] = 1;
         }  
     }
-
-    printCudaInfo();
-
+    
+    // I comment this statement because it cause stack smashing in my computer.
+    //printCudaInfo();
     double cudaTime = 50000.;
 
     printf("Array size: %d\n", N);

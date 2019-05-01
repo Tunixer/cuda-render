@@ -27,6 +27,20 @@ static inline int nextPow2(int n) {
     return n;
 }
 
+
+/*
+CUDA kernel
+A naive version of exlcusive scan
+*/
+__global__ void work_inefficient_scan_kernel(int *X, int *Y, int InputSize){
+    int idx = blockIdx.x*blockDim.x +threadIdx.x;
+    int sum = 0;
+    for(int i = 0; i < idx; i++ ){
+        sum += X[i];
+    }
+    Y[idx] = sum;
+}
+
 // exclusive_scan --
 //
 // Implementation of an exclusive scan on global memory array `input`,
@@ -53,7 +67,10 @@ void exclusive_scan(int* input, int N, int* result)
     // on the CPU.  Your implementation will need to make multiple calls
     // to CUDA kernel functions (that you must write) to implement the
     // scan.
-
+    printf("Start ex_scan\n");
+    const int threadsPerBlock = 32;
+    const int blocks = N / threadsPerBlock+1;
+    work_inefficient_scan_kernel<<<blocks, threadsPerBlock>>>(input,result,N);
 
 }
 
