@@ -10,6 +10,7 @@
 #include <thrust/device_malloc.h>
 #include <thrust/device_free.h>
 
+#include <iostream>
 #include "CycleTimer.h"
 
 #define THREADS_PER_BLOCK 1024
@@ -83,7 +84,7 @@ Block size must be smaller than 1024 in 2080Ti
 An O(N) version of exclusive scan for array of arbitary length
 */
 
-__global__ void inblock_eff_scan(int *X, int *Y, int InputSize) {
+__global__ void inblock_eff_scan(int *X, int *Y, int InputSize, int *FormerSum) {
     // XY[2*BLOCK_SIZE] is in shared memory
     __shared__ int XY[THREADS_PER_BLOCK * 2];
     int i = blockIdx.x*blockDim.x + threadIdx.x;
@@ -111,10 +112,39 @@ __global__ void inblock_eff_scan(int *X, int *Y, int InputSize) {
 
     __syncthreads();
     if (i < InputSize){
-        Y[i] = XY[threadIdx.x]-X[i];
+        Y[i] = XY[threadIdx.x]-X[i]+*FormerSum;
+        //printf("Final: Y[%d] = %d\n",i,Y[i]);
+    }
+    __syncthreads();
+    if (i == InputSize-1){
+        *FormerSum = X[i]+Y[i];
     }
 }
 
+void efficient_exclusive_scan(int *X, int *Y, int InputSize){
+    std::cout<<InputSize<<std::endl;
+    int *tmp = {0};
+    cudaMalloc((void **)&tmp, sizeof(int));
+    for(int i = 0; i < InputSize; i += THREADS_PER_BLOCK){
+        const int threadsPerBlock = THREADS_PER_BLOCK;
+        int len = (i+threadsPerBlock >= InputSize)? InputSize-i: threadsPerBlock;
+        const int blocks = len / threadsPerBlock+1;
+        inblock_eff_scan<<<blocks, threadsPerBlock>>>(&X[i],&Y[i],len,tmp);
+        cudaCheckError( cudaDeviceSynchronize() ); 
+    }
+    cudaFree(tmp);
+}
+
+void test_inblock_exclusive_scan(int *X, int *Y, int InputSize){
+    int *tmp = {0};
+    cudaMalloc((void **)&tmp, sizeof(int));
+    const int threadsPerBlock = THREADS_PER_BLOCK;
+    const int blocks = InputSize / threadsPerBlock+1;
+    int offset = 4;
+    inblock_eff_scan<<<blocks, threadsPerBlock>>>(&X[offset],&Y[offset],InputSize-offset,tmp);
+    cudaCheckError( cudaDeviceSynchronize() ); 
+    cudaFree(tmp);
+}
 
 // exclusive_scan --
 //
@@ -143,10 +173,8 @@ void exclusive_scan(int* input, int N, int* result)
     // to CUDA kernel functions (that you must write) to implement the
     // scan.
     printf("Start ex_scan\n");
-    const int threadsPerBlock = THREADS_PER_BLOCK;
-    const int blocks = N / threadsPerBlock+1;
-    inblock_eff_scan<<<blocks, threadsPerBlock>>>(input,result,N);
-    cudaCheckError( cudaDeviceSynchronize() ); 
+    efficient_exclusive_scan(input, result, N);
+
 }
 
 
