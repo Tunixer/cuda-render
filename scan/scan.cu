@@ -12,7 +12,7 @@
 
 #include "CycleTimer.h"
 
-#define THREADS_PER_BLOCK 16
+#define THREADS_PER_BLOCK 1024
 
 
 #define DEBUG
@@ -78,12 +78,12 @@ __global__ void work_inefficient_scan_kernel_2(int *X, int *Y, int InputSize) {
 }
     
 /*
-CUDA Kernel
-An O(N) version of exclusive scan
-In 2080ti BLOCK_SIZE = 16
+CUDA Kernel for In-Block Exclusive Scan
+Block size must be smaller than 1024 in 2080Ti
+An O(N) version of exclusive scan for array of arbitary length
 */
 
-__global__ void work_efficient_scan_kernel(int *X, int *Y, int InputSize) {
+__global__ void inblock_eff_scan(int *X, int *Y, int InputSize) {
     // XY[2*BLOCK_SIZE] is in shared memory
     __shared__ int XY[THREADS_PER_BLOCK * 2];
     int i = blockIdx.x*blockDim.x + threadIdx.x;
@@ -95,7 +95,7 @@ __global__ void work_efficient_scan_kernel(int *X, int *Y, int InputSize) {
     for (unsigned int stride = 1; stride <= THREADS_PER_BLOCK; stride *= 2) {
         __syncthreads();
         int index = (threadIdx.x+1)*stride*2 - 1; 
-        if(index < 2*THREADS_PER_BLOCK)
+        if(index < InputSize)
             XY[index] += XY[index - stride];//index is alway bigger than stride
         __syncthreads();
     }
@@ -105,7 +105,7 @@ __global__ void work_efficient_scan_kernel(int *X, int *Y, int InputSize) {
     for (unsigned int stride = THREADS_PER_BLOCK/2; stride > 0 ; stride /= 2) {
         __syncthreads();
         int index = (threadIdx.x+1)*stride*2 - 1;
-        if(index < 2*THREADS_PER_BLOCK)
+        if(index < InputSize)
             XY[index + stride] += XY[index];  
     }
 
@@ -145,7 +145,7 @@ void exclusive_scan(int* input, int N, int* result)
     printf("Start ex_scan\n");
     const int threadsPerBlock = THREADS_PER_BLOCK;
     const int blocks = N / threadsPerBlock+1;
-    work_efficient_scan_kernel<<<blocks, threadsPerBlock>>>(input,result,N);
+    inblock_eff_scan<<<blocks, threadsPerBlock>>>(input,result,N);
     cudaCheckError( cudaDeviceSynchronize() ); 
 }
 
