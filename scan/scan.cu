@@ -12,8 +12,25 @@
 
 #include "CycleTimer.h"
 
-#define THREADS_PER_BLOCK 256
+#define THREADS_PER_BLOCK 16
 
+
+#define DEBUG
+
+#ifdef DEBUG
+#define cudaCheckError(ans) { cudaAssert((ans), __FILE__, __LINE__); }
+inline void cudaAssert(cudaError_t code, const char *file, int line, bool abort=true)
+{
+   if (code != cudaSuccess) 
+   {
+      fprintf(stderr, "CUDA Error: %s at %s:%d\n", 
+        cudaGetErrorString(code), file, line);
+      if (abort) exit(code);
+   }
+}
+#else
+#define cudaCheckError(ans) ans
+#endif
 
 // helper function to round an integer up to the next power of 2
 static inline int nextPow2(int n) {
@@ -63,14 +80,16 @@ __global__ void work_inefficient_scan_kernel_2(int *X, int *Y, int InputSize) {
 /*
 CUDA Kernel
 An O(N) version of exclusive scan
-
+In 2080ti BLOCK_SIZE = 16
 */
 
 __global__ void work_efficient_scan_kernel(int *X, int *Y, int InputSize) {
     // XY[2*BLOCK_SIZE] is in shared memory
     __shared__ int XY[THREADS_PER_BLOCK * 2];
     int i = blockIdx.x*blockDim.x + threadIdx.x;
-    if (i < InputSize) {XY[threadIdx.x] = X[i];}
+    if (i < InputSize) {
+        XY[threadIdx.x] = X[i];
+    }
     
       // the code below performs iterative scan on XY
     for (unsigned int stride = 1; stride <= THREADS_PER_BLOCK; stride *= 2) {
@@ -89,8 +108,11 @@ __global__ void work_efficient_scan_kernel(int *X, int *Y, int InputSize) {
         if(index < 2*THREADS_PER_BLOCK)
             XY[index + stride] += XY[index];  
     }
+
     __syncthreads();
-    Y[i] = XY[threadIdx.x];
+    if (i < InputSize){
+        Y[i] = XY[threadIdx.x]-X[i];
+    }
 }
 
 
@@ -124,7 +146,7 @@ void exclusive_scan(int* input, int N, int* result)
     const int threadsPerBlock = THREADS_PER_BLOCK;
     const int blocks = N / threadsPerBlock+1;
     work_efficient_scan_kernel<<<blocks, threadsPerBlock>>>(input,result,N);
-
+    cudaCheckError( cudaDeviceSynchronize() ); 
 }
 
 
