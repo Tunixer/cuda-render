@@ -142,8 +142,9 @@ int main(int argc, char** argv) {
         }  
     }
 
-    std::cout<<"Array of size 10:";
-    for(int i = 0; i < 10; i++){
+    int test_len = 20;
+    printf("Array of size %d:",test_len);
+    for(int i = 0; i < test_len; i++){
         std::cout<<inarray[i]<<" ";
     }
     std::cout<<"\n";

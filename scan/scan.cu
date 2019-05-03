@@ -13,7 +13,7 @@
 #include <iostream>
 #include "CycleTimer.h"
 
-#define THREADS_PER_BLOCK 1024
+#define THREADS_PER_BLOCK 4
 
 
 #define DEBUG
@@ -91,10 +91,9 @@ __global__ void inblock_eff_scan(int *X, int *Y, int InputSize, int *FormerSum) 
     if (i < InputSize) {
         XY[threadIdx.x] = X[i];
     }
-    
+    __syncthreads();
       // the code below performs iterative scan on XY
     for (unsigned int stride = 1; stride <= THREADS_PER_BLOCK; stride *= 2) {
-        __syncthreads();
         int index = (threadIdx.x+1)*stride*2 - 1; 
         if(index < InputSize)
             XY[index] += XY[index - stride];//index is alway bigger than stride
@@ -106,7 +105,7 @@ __global__ void inblock_eff_scan(int *X, int *Y, int InputSize, int *FormerSum) 
     for (unsigned int stride = THREADS_PER_BLOCK/2; stride > 0 ; stride /= 2) {
         __syncthreads();
         int index = (threadIdx.x+1)*stride*2 - 1;
-        if(index < InputSize)
+        if(index + stride < InputSize)
             XY[index + stride] += XY[index];  
     }
 
@@ -120,8 +119,11 @@ __global__ void inblock_eff_scan(int *X, int *Y, int InputSize, int *FormerSum) 
         *FormerSum = X[i]+Y[i];
     }
 }
-
-void efficient_exclusive_scan(int *X, int *Y, int InputSize){
+/*
+Efficient Exclusive Scan version 1
+In-Block Prefix-Sum + Sequentially read in Blocks
+*/
+void efficient_exclusive_scan_1(int *X, int *Y, int InputSize){
     std::cout<<InputSize<<std::endl;
     int *tmp = {0};
     cudaMalloc((void **)&tmp, sizeof(int));
@@ -145,6 +147,149 @@ void test_inblock_exclusive_scan(int *X, int *Y, int InputSize){
     cudaCheckError( cudaDeviceSynchronize() ); 
     cudaFree(tmp);
 }
+
+/*
+Efficient Exclusive Scan version 2
+In-Block Prefix-Sum + Parallelly read in blocks
+2019/5/3 We first implement a version that input array is length of 2-power
+Initial Setting 32 Blocks * 32 Threads
+*/
+
+
+/*
+CUDA Kernel for In-Block Exclusive Scan ver 2
+For multiple block scan version
+Block size must be smaller than 1024 in 2080Ti
+An O(N) version of exclusive scan for array of arbitary length
+*/
+
+__global__ void multi_inblock_eff_scan_1(int *X, int *Y, int *itm_sum, int InputSize) {
+    // XY[2*BLOCK_SIZE] is in shared memory
+    __shared__ int XY[THREADS_PER_BLOCK * 2];
+    int i = blockIdx.x*blockDim.x + threadIdx.x;
+    if (i < InputSize) {
+        XY[threadIdx.x] = X[i];
+    }
+    __syncthreads();
+      // the code below performs iterative scan on XY
+    for (unsigned int stride = 1; stride <= THREADS_PER_BLOCK; stride *= 2) {
+        int index = (threadIdx.x+1)*stride*2 - 1; 
+        if(index < THREADS_PER_BLOCK * 2)
+            XY[index] += XY[index - stride];//index is alway bigger than stride
+        __syncthreads();
+    }
+      // threadIdx.x+1 = 1,2,3,4....
+      // stridek index = 1,3,5,7...
+
+    for (unsigned int stride = THREADS_PER_BLOCK/2; stride > 0 ; stride /= 2) {
+        __syncthreads();
+        int index = (threadIdx.x+1)*stride*2 - 1;
+        if(index + stride < THREADS_PER_BLOCK * 2)
+            XY[index + stride] += XY[index];  
+    }
+
+    __syncthreads();
+    if (i < InputSize){
+        Y[i] = XY[threadIdx.x];
+        //printf("Y[%d] = %d\n",i,Y[i]);
+    }
+    __syncthreads();
+
+    if(threadIdx.x == 0 && i < InputSize){
+        if(i+THREADS_PER_BLOCK <= InputSize){
+            itm_sum[blockIdx.x] = XY[THREADS_PER_BLOCK-1];
+        }else{
+            itm_sum[blockIdx.x] = XY[InputSize -i];
+        }
+    }
+
+}
+
+
+__global__ void multi_inblock_eff_scan_2(int *X, int *Y, int *former_sum,int InputSize) {
+    __shared__ int XY[THREADS_PER_BLOCK * 2];
+    int i = blockIdx.x*blockDim.x + threadIdx.x;
+    if (i < InputSize) {
+        XY[threadIdx.x] = X[i];
+    }
+    __syncthreads();
+    for (unsigned int stride = 1; stride <= THREADS_PER_BLOCK; stride *= 2) {
+        int index = (threadIdx.x+1)*stride*2 - 1; 
+        if(index < InputSize)
+            XY[index] += XY[index - stride];
+        __syncthreads();
+    }
+
+    for (unsigned int stride = THREADS_PER_BLOCK/2; stride > 0 ; stride /= 2) {
+        __syncthreads();
+        int index = (threadIdx.x+1)*stride*2 - 1;
+        if(index + stride < InputSize)
+            XY[index + stride] += XY[index];  
+    }
+
+    __syncthreads();
+    if (i < InputSize){
+        //printf("itm_sum[%d] = %d\n",i,Y[i]);
+        Y[i] = XY[threadIdx.x] + *former_sum;
+    }
+}
+
+__global__ void multi_inblock_eff_scan_3(int *X, int *Y,int *itm_sum,int *former_sum, int InputSize) {
+    __shared__ int XY[THREADS_PER_BLOCK];
+    __shared__ int prefix_sum;
+    int i = blockIdx.x*blockDim.x + threadIdx.x;
+    bool valid_idx = (i < InputSize);
+
+    if (blockIdx.x == 0 && threadIdx.x == 0) {
+        prefix_sum = *former_sum;
+        //printf("Former_Sum: %d\n",prefix_sum);
+    }
+    if (threadIdx.x == 0 && blockIdx.x > 0) prefix_sum = itm_sum[blockIdx.x - 1];
+    __syncthreads();
+    if (valid_idx) { 
+        XY[threadIdx.x] = Y[i] + prefix_sum - X[i];
+    }
+
+    __syncthreads();
+    if (i == InputSize - 1){
+        //printf("Before Former Sum:%d \n",*former_sum);
+        *former_sum = itm_sum[blockIdx.x];
+        //printf("New Former Sum:%d \n",*former_sum);
+    } 
+    if (valid_idx){
+        //printf("result[%d] = %d, prefix_sum = %d\n",i,XY[threadIdx.x], prefix_sum);
+        Y[i] = XY[threadIdx.x];
+    }
+}
+
+void efficient_exclusive_scan_2(int *X, int *Y, int InputSize){
+    std::cout<<InputSize<<std::endl;
+    int *tmp = {0};
+    int len_imm = 2;
+    int *imm_sum;
+    cudaMalloc((void **)&tmp, sizeof(int));
+    cudaMalloc((void **)&imm_sum, sizeof(int)*len_imm);
+    for(int i = 0; i < InputSize; i += THREADS_PER_BLOCK * len_imm){
+        const int threadsPerBlock = THREADS_PER_BLOCK;
+        int len = (i+threadsPerBlock*len_imm >= InputSize)? InputSize-i: threadsPerBlock*len_imm;
+        const int blocks = len / threadsPerBlock;
+        //std::cout<<"Block size: "<< blocks<<", # of Threads :"<<threadsPerBlock<<std::endl;
+        //std::cout<<"Start Index: "<< i<<", Length :"<<len<<std::endl;
+        multi_inblock_eff_scan_1<<<blocks, threadsPerBlock>>>(&X[i],&Y[i],imm_sum,len);
+        //std::cout<<"Stage 1 Finished"<<std::endl;
+        cudaCheckError( cudaDeviceSynchronize() ); 
+        multi_inblock_eff_scan_2<<<1, len_imm>>>(imm_sum,imm_sum,tmp,len_imm);
+        //std::cout<<"Stage 2 Finished"<<std::endl;
+        cudaCheckError( cudaDeviceSynchronize() ); 
+        multi_inblock_eff_scan_3<<<blocks, threadsPerBlock>>>(&X[i],&Y[i],imm_sum,tmp,len);
+        //std::cout<<"Stage 3 Finished"<<std::endl;
+        cudaCheckError( cudaDeviceSynchronize() ); 
+        //std::cout<<std::endl;
+    }
+    cudaFree(tmp);
+    cudaFree(imm_sum);
+}
+
 
 // exclusive_scan --
 //
@@ -173,7 +318,7 @@ void exclusive_scan(int* input, int N, int* result)
     // to CUDA kernel functions (that you must write) to implement the
     // scan.
     printf("Start ex_scan\n");
-    efficient_exclusive_scan(input, result, N);
+    efficient_exclusive_scan_2(input, result, N);
 
 }
 
