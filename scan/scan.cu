@@ -13,7 +13,7 @@
 #include <iostream>
 #include "CycleTimer.h"
 
-#define THREADS_PER_BLOCK 4
+#define THREADS_PER_BLOCK 1024
 
 
 #define DEBUG
@@ -265,14 +265,14 @@ __global__ void multi_inblock_eff_scan_3(int *X, int *Y,int *itm_sum,int *former
 void efficient_exclusive_scan_2(int *X, int *Y, int InputSize){
     std::cout<<InputSize<<std::endl;
     int *tmp = {0};
-    int len_imm = 2;
+    int len_imm = 32;
     int *imm_sum;
     cudaMalloc((void **)&tmp, sizeof(int));
     cudaMalloc((void **)&imm_sum, sizeof(int)*len_imm);
     for(int i = 0; i < InputSize; i += THREADS_PER_BLOCK * len_imm){
         const int threadsPerBlock = THREADS_PER_BLOCK;
         int len = (i+threadsPerBlock*len_imm >= InputSize)? InputSize-i: threadsPerBlock*len_imm;
-        const int blocks = len / threadsPerBlock;
+        const int blocks = len / threadsPerBlock+1;
         //std::cout<<"Block size: "<< blocks<<", # of Threads :"<<threadsPerBlock<<std::endl;
         //std::cout<<"Start Index: "<< i<<", Length :"<<len<<std::endl;
         multi_inblock_eff_scan_1<<<blocks, threadsPerBlock>>>(&X[i],&Y[i],imm_sum,len);
