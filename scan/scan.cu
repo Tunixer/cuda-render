@@ -86,7 +86,7 @@ An O(N) version of exclusive scan for array of arbitary length
 
 __global__ void inblock_eff_scan(int *X, int *Y, int InputSize, int *FormerSum) {
     // XY[2*BLOCK_SIZE] is in shared memory
-    __shared__ int XY[THREADS_PER_BLOCK * 2];
+    __shared__ int XY[THREADS_PER_BLOCK ];
     int i = blockIdx.x*blockDim.x + threadIdx.x;
     if (i < InputSize) {
         XY[threadIdx.x] = X[i];
@@ -165,7 +165,7 @@ An O(N) version of exclusive scan for array of arbitary length
 
 __global__ void multi_inblock_eff_scan_1(int *X, int *Y, int *itm_sum, int InputSize) {
     // XY[2*BLOCK_SIZE] is in shared memory
-    __shared__ int XY[THREADS_PER_BLOCK * 2];
+    __shared__ int XY[THREADS_PER_BLOCK ];
     int i = blockIdx.x*blockDim.x + threadIdx.x;
     if (i < InputSize) {
         XY[threadIdx.x] = X[i];
@@ -174,7 +174,7 @@ __global__ void multi_inblock_eff_scan_1(int *X, int *Y, int *itm_sum, int Input
       // the code below performs iterative scan on XY
     for (unsigned int stride = 1; stride <= THREADS_PER_BLOCK; stride *= 2) {
         int index = (threadIdx.x+1)*stride*2 - 1; 
-        if(index < THREADS_PER_BLOCK * 2)
+        if(index < THREADS_PER_BLOCK )
             XY[index] += XY[index - stride];//index is alway bigger than stride
         __syncthreads();
     }
@@ -184,7 +184,7 @@ __global__ void multi_inblock_eff_scan_1(int *X, int *Y, int *itm_sum, int Input
     for (unsigned int stride = THREADS_PER_BLOCK/2; stride > 0 ; stride /= 2) {
         __syncthreads();
         int index = (threadIdx.x+1)*stride*2 - 1;
-        if(index + stride < THREADS_PER_BLOCK * 2)
+        if(index + stride < THREADS_PER_BLOCK )
             XY[index + stride] += XY[index];  
     }
 
@@ -207,7 +207,7 @@ __global__ void multi_inblock_eff_scan_1(int *X, int *Y, int *itm_sum, int Input
 
 
 __global__ void multi_inblock_eff_scan_2(int *X, int *Y, int *former_sum,int InputSize) {
-    __shared__ int XY[THREADS_PER_BLOCK * 2];
+    __shared__ int XY[THREADS_PER_BLOCK ];
     int i = blockIdx.x*blockDim.x + threadIdx.x;
     if (i < InputSize) {
         XY[threadIdx.x] = X[i];
@@ -265,7 +265,7 @@ __global__ void multi_inblock_eff_scan_3(int *X, int *Y,int *itm_sum,int *former
 void efficient_exclusive_scan_2(int *X, int *Y, int InputSize){
     std::cout<<InputSize<<std::endl;
     int *tmp = {0};
-    int len_imm = 32;
+    int len_imm = 96;
     int *imm_sum;
     cudaMalloc((void **)&tmp, sizeof(int));
     cudaMalloc((void **)&imm_sum, sizeof(int)*len_imm);
